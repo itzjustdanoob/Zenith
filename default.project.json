@@ -1,0 +1,12 @@
+{
+  "name": "Zenith",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$className": "ReplicatedStorage",
+      "Zenith": {
+        "$path": "src"
+      }
+    }
+  }
+}

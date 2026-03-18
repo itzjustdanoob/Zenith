@@ -1,0 +1,11 @@
+[package]
+name = "yourusername/zenith"
+version = "0.1.0"
+registry = "https://github.com/UpliftGames/wally-index"
+realm = "shared"
+description = "A lightweight, structured Roblox game framework with services, controllers, middleware, and a client-server bridge."
+license = "MIT"
+authors = ["yourusername"]
+exclude = [".github", "*.md", "aftman.toml", "selene.toml"]
+
+[dependencies]
