@@ -1,70 +1,121 @@
+-- Zenith: loads your modules, runs Init and Start on them, and hands out
+-- the little helpers (Net, Signal, Janitor).
+
 local Signal = require(script.Signal)
-local Janitor = require(script.Janitor)
 local Net = require(script.Net)
+local Janitor = require(script.Janitor)
 
-local Zenith = {
-	Signal = Signal,
-	Janitor = Janitor,
-	Net = Net,
-}
+local Zenith = {}
+Zenith.Signal = Signal
+Zenith.Net = Net
+Zenith.Janitor = Janitor
 
-local registry = {}
-local order = {}
+local modules = {} -- name -> module table
+local order = {}   -- names, in the order they were registered
 local started = false
 local ready = false
 local readySignal = Signal.new()
 
 function Zenith.register(name, module)
-	assert(not started, "Zenith: register modules before calling start")
-	assert(registry[name] == nil, `Zenith: "{name}" is already registered`)
-	registry[name] = module
-	table.insert(order, name)
-	return module
+    assert(type(name) == "string", "Zenith.register needs a name")
+    assert(type(module) == "table", "Zenith.register needs a table for '" .. tostring(name) .. "'")
+
+    if started then
+        error("Can't register '" .. name .. "' after Zenith.start() already ran", 2)
+    end
+
+    if modules[name] then
+        error(("Zenith: there's already a module called '%s'. Rename one, or give it another name with Zenith.register(name, module)."):format(name), 2)
+    end
+
+    modules[name] = module
+    table.insert(order, name)
 end
 
+-- requires every ModuleScript in the container. Pass true as the second
+-- argument to also include everything nested inside folders.
 function Zenith.load(container, deep)
-	local children = if deep then container:GetDescendants() else container:GetChildren()
-	for _, child in children do
-		if child:IsA("ModuleScript") then
-			Zenith.register(child.Name, require(child))
-		end
-	end
+    local children = if deep then container:GetDescendants() else container:GetChildren()
+
+    -- sorted so the order is the same every run
+    table.sort(children, function(a, b)
+        return a:GetFullName() < b:GetFullName()
+    end)
+
+    for _, child in children do
+        if child:IsA("ModuleScript") then
+            local ok, result = pcall(require, child)
+            if not ok then
+                error(("Zenith: couldn't require %s:\n%s"):format(child:GetFullName(), tostring(result)), 2)
+            end
+            if type(result) ~= "table" then
+                error(("Zenith: %s has to return a table, got %s"):format(child:GetFullName(), typeof(result)), 2)
+            end
+
+            Zenith.register(child.Name, result)
+        end
+    end
 end
 
 function Zenith.get(name)
-	local module = registry[name]
-	if module == nil then
-		error(`Zenith: nothing registered as "{name}"`, 2)
-	end
-	return module
+    local module = modules[name]
+    if not module then
+        error(("Zenith: no module called '%s'"):format(name), 2)
+    end
+    return module
 end
 
+local function traceback(err)
+    return debug.traceback(tostring(err), 2)
+end
+
+-- Runs Init on everything one at a time, then Start on everything in its own thread.
+-- If a module errors it gets logged and skipped, the rest keep going.
 function Zenith.start()
-	assert(not started, "Zenith: already started")
-	started = true
+    if started then
+        warn("Zenith.start() was already called")
+        return
+    end
+    started = true
 
-	for _, name in order do
-		local module = registry[name]
-		if type(module) == "table" and type(module.Init) == "function" then
-			module:Init()
-		end
-	end
+    local failed = {}
 
-	for _, name in order do
-		local module = registry[name]
-		if type(module) == "table" and type(module.Start) == "function" then
-			task.spawn(module.Start, module)
-		end
-	end
+    for _, name in order do
+        local module = modules[name]
+        if type(module.Init) == "function" then
+            local ok, err = xpcall(module.Init, traceback, module)
+            if not ok then
+                failed[name] = true
+                warn(("Zenith: %s:Init() failed, skipping it.\n%s"):format(name, err))
+            end
+        end
+    end
 
-	ready = true
-	readySignal:Fire()
+    for _, name in order do
+        local module = modules[name]
+        if not failed[name] and type(module.Start) == "function" then
+            task.spawn(function()
+                local ok, err = xpcall(module.Start, traceback, module)
+                if not ok then
+                    warn(("Zenith: %s:Start() failed.\n%s"):format(name, err))
+                end
+            end)
+        end
+    end
+
+    -- "ready" means every Init finished and every Start has been kicked off
+    -- (each one ran until it finished or first yielded). It doesn't wait for
+    -- Start functions to return, since some of them loop forever on purpose.
+    ready = true
+    readySignal:Fire()
 end
 
+-- yields until start() is done
 function Zenith.onStart()
-	if not ready then
-		readySignal:Wait()
-	end
+    if ready then
+        return
+    end
+    readySignal:Wait()
 end
 
 return Zenith
