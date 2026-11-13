@@ -1,25 +1,16 @@
 # Zenith
 
-A small Luau framework for Roblox. It gives you a module loader with a simple lifecycle, clean networking, signals, and a cleanup helper. That's it. No dependencies, around 300 lines total.
+A small Luau framework for Roblox. It gives you a module loader with a simple lifecycle, networking that doesn't get in your way, signals, and a cleanup helper. No dependencies, around 300 lines total.
 
-I built it because most frameworks do way more than I need. Zenith does the boring plumbing and stays out of the way.
+I built it because most frameworks do far more than I need. Zenith handles the boring plumbing and then stays out of the way.
 
 ## Install
 
-**Wally**
-
-```toml
-[dependencies]
-Zenith = "itzjustdanoob/zenith@0.2.0"
-```
-
-**Rojo**
-
-Clone the repo and sync `default.project.json`. Put the result in `ReplicatedStorage` so both server and client can require it.
+Clone the repo and sync `default.project.json` with Rojo, or just copy the `src` folder into Studio and rename it `Zenith`. Put it in `ReplicatedStorage` so both the server and the client can require it.
 
 ## Quick start
 
-Server bootstrap (a Script in `ServerScriptService`):
+Server (a Script in `ServerScriptService`):
 
 ```lua
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -31,7 +22,7 @@ Zenith.load(ServerScriptService.Services)
 Zenith.start()
 ```
 
-Client bootstrap (a LocalScript in `StarterPlayerScripts`):
+Client (a LocalScript in `StarterPlayerScripts`):
 
 ```lua
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -43,7 +34,9 @@ Zenith.load(Players.LocalPlayer.PlayerScripts.Controllers)
 Zenith.start()
 ```
 
-Every ModuleScript in the folder gets registered under its name. When you call `start`, Zenith runs `Init` on all of them first, then `Start` on all of them in separate threads. Use `Init` to set things up and `Start` for anything that talks to other modules.
+Every ModuleScript in the folder gets registered under its name. When you call `start`, Zenith runs `Init` on all of them first, then `Start` on all of them in separate threads.
+
+Use `Init` to set up your own stuff. Use `Start` for anything that talks to other modules. Don't count on the order modules load in, so don't call `Zenith.get` inside `Init` and expect the other module to be ready.
 
 A service looks like this:
 
@@ -56,19 +49,31 @@ local Zenith = require(ReplicatedStorage.Zenith)
 local Coins = {}
 
 function Coins:Init()
-	self.balances = {}
-	self.changed = Zenith.Net.Event("CoinsChanged")
+    self.balances = {}
+    self.changed = Zenith.Net.Event("CoinsChanged")
 end
 
 function Coins:Start()
-	Players.PlayerAdded:Connect(function(player)
-		self.balances[player] = 0
-	end)
+    local function setup(player)
+        self.balances[player] = 0
+    end
+
+    Players.PlayerAdded:Connect(setup)
+
+    -- catch anyone who joined before Start ran
+    for _, player in Players:GetPlayers() do
+        setup(player)
+    end
+
+    -- don't leak balances when people leave
+    Players.PlayerRemoving:Connect(function(player)
+        self.balances[player] = nil
+    end)
 end
 
 function Coins:Add(player, amount)
-	self.balances[player] += amount
-	self.changed:Fire(player, self.balances[player])
+    self.balances[player] += amount
+    self.changed:Fire(player, self.balances[player])
 end
 
 return Coins
@@ -82,13 +87,13 @@ Grab another module with `Zenith.get("Coins")`.
 
 - `Zenith.load(container, deep)` requires every ModuleScript in `container` and registers it. Pass `true` to include descendants.
 - `Zenith.register(name, module)` registers a module by hand.
-- `Zenith.get(name)` returns a registered module or errors if it doesn't exist.
-- `Zenith.start()` runs `Init` then `Start` on everything registered.
+- `Zenith.get(name)` returns a registered module, or errors if it doesn't exist.
+- `Zenith.start()` runs `Init`, then `Start`, on everything registered.
 - `Zenith.onStart()` yields until startup has finished.
 
 ### Net
 
-Same code on both sides. The server creates the remotes, the client finds them.
+Same code on both sides. The server creates the remotes and the client finds them.
 
 ```lua
 local Net = Zenith.Net
@@ -120,13 +125,13 @@ Functions:
 
 ```lua
 Net.Function("GetStats"):Handle(function(player)
-	return { coins = 10 }
+    return { coins = 10 }
 end)
 
 local stats = Net.Function("GetStats"):Invoke()
 ```
 
-The server can't invoke the client on purpose. Yielding on a client that might never answer is a good way to hang a thread.
+The server can't invoke the client, on purpose. Yielding on a client that might never answer is a good way to hang a thread.
 
 ### Signal
 
@@ -134,7 +139,7 @@ The server can't invoke the client on purpose. Yielding on a client that might n
 local changed = Zenith.Signal.new()
 
 local connection = changed:Connect(function(value)
-	print(value)
+    print(value)
 end)
 
 changed:Fire(5)
@@ -146,7 +151,7 @@ changed:Destroy()
 
 ### Janitor
 
-Collect things, clean them up in one go. It handles functions, connections, instances, threads, and anything with `Destroy` or `Disconnect`.
+Collect things, then clean them all up in one go. It handles functions, connections, instances, threads, and anything with `Destroy` or `Disconnect`.
 
 ```lua
 local janitor = Zenith.Janitor.new()
@@ -154,13 +159,17 @@ local janitor = Zenith.Janitor.new()
 janitor:Add(Instance.new("Part"))
 janitor:Connect(workspace.ChildAdded, handler)
 janitor:Add(function()
-	print("gone")
+    print("gone")
 end)
 
 janitor:Cleanup()
 ```
 
-Items are cleaned in reverse order, last added first.
+Items are cleaned up in reverse order, last added first.
+
+## Contributing
+
+Found a bug or want something added? Open an issue or a pull request. Small and focused changes are easiest to review.
 
 ## License
 
